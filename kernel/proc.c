@@ -291,10 +291,12 @@ fork(void)
 
   safestrcpy(np->name, p->name, sizeof(p->name));
 
+  np->trace_mask = p->trace_mask;//子进程继承父进程的syscall_trace
+
   pid = np->pid;
 
   np->state = RUNNABLE;
-
+  
   release(&np->lock);
 
   return pid;
@@ -692,4 +694,15 @@ procdump(void)
     printf("%d %s %s", p->pid, state, p->name);
     printf("\n");
   }
+}
+
+uint64
+count_proc(void) { // 统计已分配的进程数 (lab2)
+  uint64 cnt = 0;
+  for(struct proc *p = proc; p < &proc[NPROC]; p++) {
+    if(p->state != UNUSED) { // 不是 UNUSED 的进程,即已分配的进程数
+        cnt++;
+    }
+  }
+  return cnt;
 }

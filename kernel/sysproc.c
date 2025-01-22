@@ -6,6 +6,8 @@
 #include "memlayout.h"
 #include "spinlock.h"
 #include "proc.h"
+#include "sysinfo.h"
+
 
 uint64
 sys_exit(void)
@@ -94,4 +96,32 @@ sys_uptime(void)
   xticks = ticks;
   release(&tickslock);
   return xticks;
+}
+
+uint64
+sys_trace(void)
+{
+  int mask;
+  if(argint(0, &mask) < 0) // 读取进程的 trapframe，获得 mask 参数
+                          // 0表示读取trapframe的a0寄存器中的数据，a0寄存器存调用的第一个参数
+    return -1;
+  
+  myproc()->trace_mask = mask;
+  return 0;
+}
+
+uint64
+sys_sysinfo(void){
+  struct sysinfo info;
+  info.freemem = count_free_mem();
+  info.nproc = count_proc();
+
+  //从用户态读入一个指针作为存放数据的地址。
+  //从内存来看，addr所指向的空间就是传入的第一个参数的位置，即sysinfo(struct sysinfo *info)中的info
+  uint64 addr;
+  if(argaddr(0,&addr) < 0)
+    return -1;
+  if(copyout(myproc()->pagetable, addr, (char*)&info, sizeof(info)) < 0)
+    return -1;
+  return 0;
 }

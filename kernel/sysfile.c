@@ -107,7 +107,7 @@ sys_close(void)
 uint64
 sys_fstat(void)
 {
-  struct file *f;
+  struct file *f;//利用argfd拿到文件描述符
   uint64 st; // user pointer to struct stat
 
   if(argfd(0, 0, &f) < 0 || argaddr(1, &st) < 0)

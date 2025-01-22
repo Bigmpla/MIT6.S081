@@ -1,0 +1,8 @@
+{
+    "files.associations": {
+        "user.h": "c",
+        "*.inc": "c",
+        "*.list": "c"
+    },
+    "git.ignoreLimitWarning": true
+}

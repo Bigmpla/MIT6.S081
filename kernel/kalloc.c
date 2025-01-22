@@ -23,6 +23,8 @@ struct {
   struct run *freelist;
 } kmem;
 
+
+
 void
 kinit()
 {
@@ -79,4 +81,24 @@ kalloc(void)
   if(r)
     memset((char*)r, 5, PGSIZE); // fill with junk
   return (void*)r;
+}
+
+
+// kernel/kalloc.c
+uint64
+count_free_mem(void) // 统计空闲内存大小（byte为单位） (lab2)
+{
+  acquire(&kmem.lock); // ”必须先锁内存管理结构，防止竞态条件出现“
+  
+  // 统计空闲页数，xv6用的是空闲列表法
+  uint64 mem_bytes = 0;
+  struct run *r = kmem.freelist;
+  while(r){
+    mem_bytes += PGSIZE;
+    r = r->next;
+  }
+
+  release(&kmem.lock);
+
+  return mem_bytes;
 }
