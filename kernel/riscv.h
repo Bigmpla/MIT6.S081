@@ -183,7 +183,7 @@ w_mtvec(uint64 x)
 
 // use riscv's sv39 page table scheme.
 #define SATP_SV39 (8L << 60)
-
+// 用于生成一个 satp 寄存器的值，将虚拟内存模式和页表基地址合并
 #define MAKE_SATP(pagetable) (SATP_SV39 | (((uint64)pagetable) >> 12))
 
 // supervisor address translation and protection;
@@ -315,6 +315,7 @@ r_ra()
 static inline void
 sfence_vma()
 {
+  // 通过清除 TLB 中所有条目，确保所有虚拟地址的映射都重新加载。
   // the zero, zero means flush all TLB entries.
   asm volatile("sfence.vma zero, zero");
 }
@@ -324,22 +325,27 @@ sfence_vma()
 #define PGSHIFT 12  // bits of offset within a page
 
 #define PGROUNDUP(sz)  (((sz)+PGSIZE-1) & ~(PGSIZE-1))
-#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1))
+#define PGROUNDDOWN(a) (((a)) & ~(PGSIZE-1)) //接受一个值 a，将其调整到一个页大小的整数倍。
 
+
+//页表条目中常见的标志，用于描述内存页的访问权限和状态
 #define PTE_V (1L << 0) // valid
-#define PTE_R (1L << 1)
-#define PTE_W (1L << 2)
-#define PTE_X (1L << 3)
+#define PTE_R (1L << 1) // readable
+#define PTE_W (1L << 2) // writable
+#define PTE_X (1L << 3) // executable
 #define PTE_U (1L << 4) // 1 -> user can access
 
 // shift a physical address to the right place for a PTE.
+
 #define PA2PTE(pa) ((((uint64)pa) >> 12) << 10)
 
+// 从页表项中提取物理地址，页表项的低10位是flag，物理地址的低12位是页内偏移
 #define PTE2PA(pte) (((pte) >> 10) << 12)
-
+// 低10位是flag
 #define PTE_FLAGS(pte) ((pte) & 0x3FF)
 
 // extract the three 9-bit page table indices from a virtual address.
+// 用于提取三级页表索引，level就是第几级
 #define PXMASK          0x1FF // 9 bits
 #define PXSHIFT(level)  (PGSHIFT+(9*(level)))
 #define PX(level, va) ((((uint64) (va)) >> PXSHIFT(level)) & PXMASK)

@@ -31,17 +31,17 @@ procinit(void)
   for(p = proc; p < &proc[NPROC]; p++) {
       initlock(&p->lock, "proc");
 
-      // Allocate a page for the process's kernel stack.
-      // Map it high in memory, followed by an invalid
-      // guard page.
-      char *pa = kalloc();
-      if(pa == 0)
-        panic("kalloc");
-      uint64 va = KSTACK((int) (p - proc));
-      kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
-      p->kstack = va;
+      // // Allocate a page for the process's kernel stack.
+      // // Map it high in memory, followed by an invalid
+      // // guard page.
+      // char *pa = kalloc();
+      // if(pa == 0)
+      //   panic("kalloc");
+      // uint64 va = KSTACK((int) (p - proc));
+      // kvmmap(va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+      // p->kstack = va;
   }
-  kvminithart();
+  // kvminithart();
 }
 
 // Must be called with interrupts disabled,
@@ -121,6 +121,22 @@ found:
     return 0;
   }
 
+  // 初始化内核页表
+  p->kernelpgtbl = proc_kpt_init();
+  if(p->kernelpgtbl == 0){
+    freeproc(p);
+    release(&p->lock);
+    return 0;
+  }
+
+  //从procinit()中拷贝过来的，为当前进程创建独立的内核栈
+  char *pa = kalloc();
+  if(pa == 0)
+    panic("kalloc");
+  uint64 va = KSTACK((int) (p - proc));//返回的是进程的内核栈的相对虚拟地址
+  uvmmap(p->kernelpgtbl, va, (uint64)pa, PGSIZE, PTE_R | PTE_W);
+  p->kstack = va;
+  
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -133,6 +149,22 @@ found:
 // free a proc structure and the data hanging from it,
 // including user pages.
 // p->lock must be held.
+
+void proc_freekpt(pagetable_t kpt){
+  //由freewalk修改而来
+  // there are 2^9 = 512 PTEs in a page table.
+  for(int i = 0; i < 512; i++){
+    pte_t pte = kpt[i];
+	    if((pte & PTE_V) && (pte & (PTE_R|PTE_W|PTE_X)) == 0){
+	    kpt[i] = 0;
+	    // this PTE points to a lower-level page table.
+	    uint64 child = PTE2PA(pte);
+	    proc_freekpt((pagetable_t)child);
+	  }
+  }
+  kfree((void*)kpt);
+}
+
 static void
 freeproc(struct proc *p)
 {
@@ -141,6 +173,7 @@ freeproc(struct proc *p)
   p->trapframe = 0;
   if(p->pagetable)
     proc_freepagetable(p->pagetable, p->sz);
+  
   p->pagetable = 0;
   p->sz = 0;
   p->pid = 0;
@@ -150,7 +183,15 @@ freeproc(struct proc *p)
   p->killed = 0;
   p->xstate = 0;
   p->state = UNUSED;
+
+  uvmunmap(p->kernelpgtbl, p->kstack, 1, 1);
+  p->kstack = 0;
+
+  proc_freekpt(p->kernelpgtbl);
+  p->kernelpgtbl = 0;
+  p->state = UNUSED;
 }
+
 
 // Create a user page table for a given process,
 // with no user memory, but with trampoline pages.
@@ -195,6 +236,7 @@ proc_freepagetable(pagetable_t pagetable, uint64 sz)
   uvmfree(pagetable, sz);
 }
 
+
 // a user program that calls exec("/init")
 // od -t xC initcode
 uchar initcode[] = {
@@ -220,7 +262,7 @@ userinit(void)
   // and data into it.
   uvminit(p->pagetable, initcode, sizeof(initcode));
   p->sz = PGSIZE;
-
+  new_uvmcopy(p->pagetable,p->kernelpgtbl,0,p->sz);
   // prepare for the very first "return" from kernel to user.
   p->trapframe->epc = 0;      // user program counter
   p->trapframe->sp = PGSIZE;  // user stack pointer
@@ -243,12 +285,25 @@ growproc(int n)
 
   sz = p->sz;
   if(n > 0){
+    if (PGROUNDUP(sz + n) >= PLIC){
+      return -1;
+    }
     if((sz = uvmalloc(p->pagetable, sz, sz + n)) == 0) {
+      return -1;
+    }
+    //内核页表同步扩大，还要加上多的这一部分映射
+    if(new_uvmcopy(p->pagetable,p->kernelpgtbl,p->sz,n) != 0){
+      //刚才增加的要减回去
+      uvmdealloc(p->pagetable,sz,p->sz);
       return -1;
     }
   } else if(n < 0){
     sz = uvmdealloc(p->pagetable, sz, sz + n);
+    // 内核页表同步缩小
+    sz = kvmdealloc(p->kernelpgtbl, sz, sz + n);
   }
+
+
   p->sz = sz;
   return 0;
 }
@@ -268,7 +323,9 @@ fork(void)
   }
 
   // Copy user memory from parent to child.
-  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0){
+  if(uvmcopy(p->pagetable, np->pagetable, p->sz) < 0  
+      || new_uvmcopy(np->pagetable, np->kernelpgtbl, 0,p->sz) < 0
+      ){//内核页表也要拷贝一份
     freeproc(np);
     release(&np->lock);
     return -1;
@@ -473,8 +530,13 @@ scheduler(void)
         // before jumping back to us.
         p->state = RUNNING;
         c->proc = p;
+        
+        //切换到进程自己的内核页表
+        proc_kernelinithart(p->kernelpgtbl);
+        //调度进程运行
         swtch(&c->context, &p->context);
-
+        //运行结束切换回全局内核页表
+        kvminithart();
         // Process is done running for now.
         // It should have changed its p->state before coming back.
         c->proc = 0;
