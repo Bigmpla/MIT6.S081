@@ -38,6 +38,7 @@ usertrap(void)
 {
   int which_dev = 0;
 
+  //查看当前trap是由用户还是内核触发的
   if((r_sstatus() & SSTATUS_SPP) != 0)
     panic("usertrap: not from user mode");
 
@@ -50,6 +51,8 @@ usertrap(void)
   // save user program counter.
   p->trapframe->epc = r_sepc();
   
+
+  //usertrap函数会依据ecall在scause寄存器中设置的产⽣trap的原因来执⾏不同的操作
   if(r_scause() == 8){
     // system call
 
@@ -62,7 +65,7 @@ usertrap(void)
 
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
-    intr_on();
+    intr_on();//开中断
 
     syscall();
   } else if((which_dev = devintr()) != 0){
@@ -77,9 +80,17 @@ usertrap(void)
     exit(-1);
 
   // give up the CPU if this is a timer interrupt.
-  if(which_dev == 2)
+  if(which_dev == 2){//定时器中断，让出CPU
+  if(p->alarm_gap != 0){//不为sigalarm(0, 0)
+    if(++p->tick_cnt == p->alarm_gap && p->on_alarming == 0){//放在最后检查是是否有alarm正在运行
+      *p->alarm_trapframe = *p->trapframe;
+      p->tick_cnt = 0;
+      p->trapframe->epc = (uint64)p->alarm_handler;
+      p->on_alarming = 1;
+    }
+  }
     yield();
-
+  }
   usertrapret();
 }
 
