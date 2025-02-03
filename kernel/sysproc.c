@@ -47,8 +47,15 @@ sys_sbrk(void)
   if(argint(0, &n) < 0)
     return -1;
   addr = myproc()->sz;
-  if(growproc(n) < 0)
-    return -1;
+
+  if(n < 0){//小于0就照常缩小
+    if(growproc(n) < 0)
+        return -1;
+  }else{
+    myproc()->sz += n;//大于0就懒分配
+  }
+  
+  
   return addr;
 }
 
