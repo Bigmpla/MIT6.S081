@@ -72,7 +72,7 @@ usertrap(void)
     uint64* pa;
 
     if(fault_va < p->sz 
-    && fault_va > PGROUNDUP((p->trapframe->sp)) - 1
+    && fault_va >= PGROUNDDOWN((p->trapframe->sp))
     && (pa = kalloc()) != 0){
       memset(pa, 0, PGSIZE);
       if(mappages(p->pagetable, PGROUNDDOWN(fault_va), PGSIZE, (uint64)pa, PTE_W|PTE_X|PTE_R|PTE_U) != 0){
