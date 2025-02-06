@@ -1,0 +1,23 @@
+在put函数的这段代码中：
+// is the key already present?
+  struct entry *e = 0;
+  for (e = table[i]; e != 0; e = e->next) {
+    if (e->key == key)
+      break;
+  }
+  if(e){
+    // update the existing key.
+    e->value = value;
+  } else {
+    // the new is new.
+    insert(key, value, &table[i], table[i]);
+  }
+ 
+ 逻辑是先找到对应的bucket，如果不存在就insert，存在就修改数值。
+ 当在多线程情况下，可能出现这种情况：
+ 线程1和线程2的“int i = key % NBUCKET;”i相同，即要插入同一个bucket中
+ 线程1成功运行到51行“if(e){”
+切换到线程2,线程2也成功运行到第51行“if(e){”，线程2进行操作“insert(key, value, &table[i], table[i]);”
+切换回线程1,“if(e)不成立”，线程1进行操作“e->value = value;”
+
+相当于后一个操作没有进行新的insert，而是将前一个insert的值覆盖了
