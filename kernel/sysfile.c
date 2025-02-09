@@ -316,6 +316,36 @@ sys_open(void)
     }
   }
 
+  //如果是符号链接文件，并且是跟随的情况
+  if(ip->type == T_SYMLINK && !(omode & O_NOFOLLOW)){
+    int max_cnt = 10;
+    for(int i = 0; i <= max_cnt; i++){//311行获得了第一个锁
+      if(i == max_cnt){//超过10次了就返回错误
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      
+      //读inode，读出符号链接中存着的下一个路径
+      if(readi(ip,0,(uint64)path,0,MAXPATH) < 0){
+        iunlockput(ip);
+        end_op();
+        return -1;
+      }
+      iunlockput(ip);//释放上一个ip的锁
+      //根据路径名找inode
+      ip = namei(path);
+      if(ip == 0){
+        end_op();
+        return -1;
+      }
+      ilock(ip);
+      //找到最终的文件就终止
+      if(ip->type != T_SYMLINK)
+        break;
+    }
+  }
+
   if(ip->type == T_DEVICE && (ip->major < 0 || ip->major >= NDEV)){
     iunlockput(ip);
     end_op();
@@ -483,4 +513,31 @@ sys_pipe(void)
     return -1;
   }
   return 0;
+}
+
+uint64 sys_symlink(void){
+
+  char target[MAXPATH], path[MAXPATH];
+  struct inode *ip;
+
+  if(argstr(0, target, MAXPATH) < 0 || argstr(1, path, MAXPATH) < 0)
+    return -1;
+
+  begin_op();
+  //给path创建一个符号链接类型的inode
+  ip = create(path,T_SYMLINK,0,0);
+  if(ip == 0){
+    end_op();
+    return -1;
+  }
+  //在inode的数据块中存储符号链接的目标路径
+  if(writei(ip,0,(uint64)target,0,MAXPATH) < 0){
+    end_op();
+    iunlockput(ip);//create中执行了ilock(ip)
+    return -1;
+  }
+  iunlockput(ip);
+  end_op();
+  return 0;
+
 }

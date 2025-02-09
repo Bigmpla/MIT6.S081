@@ -329,6 +329,7 @@ iunlock(struct inode *ip)
 // to it, free the inode (and its content) on disk.
 // All calls to iput() must be inside a transaction in
 // case it has to free the inode.
+// 释放inode引用，释放资源
 void
 iput(struct inode *ip)
 {
@@ -400,7 +401,37 @@ bmap(struct inode *ip, uint bn)
     brelse(bp);
     return addr;
   }
+  bn -= NINDIRECT;
 
+//二级间接块中是：二级-> 一级-> 直接
+  if(bn < NINDIRECT * NINDIRECT){
+    //如果二级间接块不存在则分配
+    if((addr = ip->addrs[NDIRECT + 1]) == 0)
+      ip->addrs[NDIRECT + 1] = addr = balloc(ip->dev);
+    //通过 bread 读取间接块内容到缓冲区 bp
+    bp = bread(ip->dev, addr);
+
+    //拿到一级间接块
+    a = (uint*)bp->data;
+    //分配一级间接块
+    if((addr = a[bn / NINDIRECT]) == 0){
+      a[bn / NINDIRECT] = addr = balloc(ip->dev);
+      //将修改写入日志
+      log_write(bp);
+    }
+    brelse(bp);
+    bp = bread(ip->dev, addr);
+
+    //拿到直接块
+    a = (uint*)bp->data;
+    //分配直接块
+    if((addr = a[bn % NINDIRECT]) == 0){
+      a[bn % NINDIRECT] = addr = balloc(ip->dev);
+      log_write(bp);
+    }
+    brelse(bp);
+    return addr;
+  }
   panic("bmap: out of range");
 }
 
@@ -430,6 +461,26 @@ itrunc(struct inode *ip)
     brelse(bp);
     bfree(ip->dev, ip->addrs[NDIRECT]);
     ip->addrs[NDIRECT] = 0;
+  }
+
+  if(ip->addrs[NDIRECT+1]){
+    bp = bread(ip->dev, ip->addrs[NDIRECT+1]);
+    a = (uint*)bp->data;//此时指向的是二级间接块
+    for(j = 0; j < NINDIRECT; j++){
+      if(a[j]){//每一个一级间接块
+        struct buf* bp1 = bread(ip->dev, a[j]);
+        uint* a1 = (uint*)bp1->data;//此时指向的是一级间接块
+        for (int k = 0; k < NINDIRECT; k++){
+          if (a1[k])
+            bfree(ip->dev, a1[k]);
+        }
+        brelse(bp1);
+        bfree(ip->dev, a[j]);
+      }   
+    }
+    brelse(bp);
+    bfree(ip->dev, ip->addrs[NDIRECT + 1]);
+    ip->addrs[NDIRECT + 1] = 0;
   }
 
   ip->size = 0;
@@ -625,6 +676,8 @@ skipelem(char *path, char *name)
 // If parent != 0, return the inode for the parent and copy the final
 // path element into name, which must have room for DIRSIZ bytes.
 // Must be called inside a transaction since it calls iput().
+//1\直接查找路径的 inode（如 namex("/home/file", 0, name) 返回 /home/file 的 inode）。
+//2\查找路径的父目录 inode（如 namex("/home/file", 1, name) 返回 /home 的 inode，并将 file 复制到 name 中）
 static struct inode*
 namex(char *path, int nameiparent, char *name)
 {
@@ -660,6 +713,7 @@ namex(char *path, int nameiparent, char *name)
   return ip;
 }
 
+//根据path找inode
 struct inode*
 namei(char *path)
 {
