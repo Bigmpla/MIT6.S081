@@ -5,6 +5,7 @@
 #include "spinlock.h"
 #include "proc.h"
 #include "defs.h"
+#include "fcntl.h"
 
 struct cpu cpus[NCPU];
 
@@ -119,7 +120,7 @@ found:
     release(&p->lock);
     return 0;
   }
-
+  
   // An empty user page table.
   p->pagetable = proc_pagetable(p);
   if(p->pagetable == 0){
@@ -127,7 +128,10 @@ found:
     release(&p->lock);
     return 0;
   }
-
+  for(int i=0;i<16;i++) {
+    p->vma[i].valid = 0;
+    memset(&p->vma[i],0,sizeof(p->vma[i]));
+  }
   // Set up new context to start executing at forkret,
   // which returns to user space.
   memset(&p->context, 0, sizeof(p->context));
@@ -296,6 +300,14 @@ fork(void)
       np->ofile[i] = filedup(p->ofile[i]);
   np->cwd = idup(p->cwd);
 
+  //复制父进程的VMA到子进程，并且增加引用计数
+  for(i = 0; i < 16; i++){
+    if(p->vma[i].valid){
+      memmove(&np->vma[i],&p->vma[i],sizeof(p->vma[i]));
+      filedup(p->vma[i].file);
+    }
+  }
+
   safestrcpy(np->name, p->name, sizeof(p->name));
 
   pid = np->pid;
@@ -350,6 +362,19 @@ exit(int status)
       struct file *f = p->ofile[fd];
       fileclose(f);
       p->ofile[fd] = 0;
+    }
+  }
+
+  for(int i = 0; i < 16; i++){
+    if(p->vma[i].valid){
+      if(p->vma[i].flags == MAP_SHARED && (p->vma[i].prot & PROT_WRITE)) {
+        filewrite(p->vma[i].file, p->vma[i].addr, p->vma[i].len);
+      }
+
+      uvmunmap(p->pagetable, p->vma[i].addr, p->vma[i].len/PGSIZE, 1);
+      
+      fileclose(p->vma[i].file);
+      p->vma[i].valid = 0;
     }
   }
 

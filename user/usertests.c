@@ -2193,6 +2193,8 @@ kernmem(char *s)
     }
     int xstatus;
     wait(&xstatus);
+  
+
     if(xstatus != -1)  // did kernel kill child?
       exit(1);
   }
@@ -2795,6 +2797,7 @@ main(int argc, char *argv[])
     {iref, "iref"},
     {forktest, "forktest"},
     {bigdir, "bigdir"}, // slow
+  
     { 0, 0},
   };
 

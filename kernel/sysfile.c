@@ -7,6 +7,7 @@
 #include "types.h"
 #include "riscv.h"
 #include "defs.h"
+#include "fcntl.h"
 #include "param.h"
 #include "stat.h"
 #include "spinlock.h"
@@ -481,6 +482,122 @@ sys_pipe(void)
     fileclose(rf);
     fileclose(wf);
     return -1;
+  }
+  return 0;
+}
+
+
+uint64 sys_mmap(void){
+  uint64 addr;
+  int len,prot,flags,offset,fd;
+  struct file* f;
+  uint64 err = 0xffffffffffffffff;
+
+  if(argaddr(0, &addr) < 0 || argint(1, &len) < 0 || argint(2, &prot) < 0 ||
+  argint(3, &flags) < 0 || argfd(4, &fd, &f) < 0 || argint(5, &offset) < 0)
+    return err;
+  
+  //文件不可写但给了写权限和需要MAP_SHARED（写回）
+  if(f->writable == 0 && (prot & PROT_WRITE) && flags == MAP_SHARED)
+    return err;
+  struct proc* p = myproc();
+  // struct VMA* v = 0;
+  //空间不足
+  if(p->sz + len > MAXVA)return err;
+  int i;
+  //分配一个空闲的vma
+  for(i = 0; i < 16; i++){
+    if(p->vma[i].valid == 0){
+      p->vma[i].addr = p->sz;//sz作为当前起始地址
+      p->vma[i].file = f;
+      p->vma[i].flags = flags;
+      p->vma[i].len = len;
+      p->vma[i].prot = prot;
+      p->vma[i].valid = 1;
+      p->vma[i].offset = offset;
+      filedup(f);//增加文件的引用计数
+      p->sz += len;
+      break;
+    }
+  }
+  //没有空闲的
+  if(i == 16)return err;
+  return p->vma[i].addr;
+}
+
+int mmap_alloc(uint64 va){
+  struct proc* p = myproc();
+  int i;
+  for(i = 0; i < 16; i++){
+    if(p->vma[i].valid && va >= p->vma[i].addr && va < p->vma[i].addr + p->vma[i].len){
+      break;
+    }
+  }
+  if(i == 16)return -1;
+  struct file* f = p->vma[i].file;
+  
+  void* pa = kalloc();
+  if(pa == 0)return -1;
+  memset(pa,0,PGSIZE);
+
+  begin_op();
+  ilock(f->ip);
+  readi(f->ip, 0, (uint64)pa, p->vma[i].offset + PGROUNDDOWN(va - p->vma[i].addr), PGSIZE);
+  iunlock(f->ip);
+  end_op();
+  
+  int perm = PTE_U;
+  if(p->vma[i].prot & PROT_WRITE){
+    perm |= PTE_W; 
+  }
+  if(p->vma[i].prot & PROT_READ){
+    perm |= PTE_R;
+  }
+  if(p->vma[i].prot & PROT_EXEC){
+    perm |= PTE_X;
+  }
+
+  if(mappages(p->pagetable,PGROUNDDOWN(va),PGSIZE,(uint64)pa,perm) != 0){
+    kfree(pa);
+    return -1;
+  }
+  return 0;
+ 
+}
+
+uint64 sys_munmap(void){
+
+  uint64 addr;
+  int len;
+  if(argaddr(0,&addr) < 0 || argint(1,&len)<0){
+    return -1;
+  }
+  struct proc* p = myproc();
+  int i;
+  for(i = 0; i < 16; i++){
+    if(p->vma[i].valid && addr >= p->vma[i].addr && addr <= p->vma[i].addr + p->vma[i].len){
+      break;
+    }
+  }
+  if(i == 16)return -1;
+
+  //利用filewrite将addr处的内容写回vma,对于文件实际上是利用writei
+  if(p->vma[i].flags == MAP_SHARED && (p->vma[i].prot & PROT_WRITE)){
+    filewrite(p->vma[i].file, addr, len);
+  }
+  //解除映射
+  uvmunmap(p->pagetable,addr,len/PGSIZE,1);
+
+  if(p->vma[i].len == len){//全部内容都被释放了
+    fileclose(p->vma[i].file);
+    p->vma[i].valid = 0;
+  }
+  
+  if(p->vma[i].addr == addr){//区域起始位置
+    p->vma[i].len -= len;
+    p->vma[i].addr += len;//新的起始位置
+  }else if(p->vma[i].addr + p->vma[i].len  == addr + len){//区域结束位置
+    p->vma[i].len -= len;
   }
   return 0;
 }

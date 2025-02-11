@@ -59,12 +59,21 @@ usertrap(void)
     // sepc points to the ecall instruction,
     // but we want to return to the next instruction.
     p->trapframe->epc += 4;
-
+  
     // an interrupt will change sstatus &c registers,
     // so don't enable until done with those registers.
     intr_on();
 
     syscall();
+  }else if(r_scause() == 13 || r_scause() == 15){
+    uint64 fault_va = r_stval();
+     if(fault_va < p->sz && fault_va >= PGROUNDDOWN((p->trapframe->sp))){
+      if(mmap_alloc(fault_va) != 0){
+        p->killed = 1;
+      }
+     }else{
+      p->killed = 1;
+     }
   } else if((which_dev = devintr()) != 0){
     // ok
   } else {
@@ -82,6 +91,8 @@ usertrap(void)
 
   usertrapret();
 }
+
+
 
 //
 // return to user space
